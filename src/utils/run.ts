@@ -16,7 +16,7 @@ export async function run(
         spinMsg: undefined,
         expectCode: false,
     },
-): Promise<void> {
+): Promise<any> {
     const spinner = options.spinMsg && !options.silent ? ora(options.spinMsg).start() : null;
 
     return new Promise((resolve, reject) => {
@@ -48,7 +48,7 @@ export async function run(
                 if (!options.silent) console.error(colorize.error(`Exited with code ${code}`));
                 reject(new Error(`Command failed: ${command}`));
             } else {
-                resolve();
+                resolve(code);
             }
         });
     });

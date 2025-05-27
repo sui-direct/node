@@ -1,5 +1,6 @@
 import { join } from "path";
 import Database from "better-sqlite3";
+import { toString } from "uint8arrays/to-string";
 import { adjectives, names, type Config as NamesConfig, uniqueNamesGenerator } from "unique-names-generator";
 
 import Auth from "./auth";
@@ -17,6 +18,7 @@ export default class Remote {
         this.node = node;
         this.auth = auth;
         this.push(node);
+        this.rename(node);
     }
 
     push(node: any) {
@@ -169,6 +171,116 @@ export default class Remote {
                         status: true,
                         blobId,
                         id: nameFromSeed,
+                    }),
+                );
+
+                resolve(true);
+            });
+        });
+    }
+
+    rename(node: any) {
+        node.handle("/rename/1.0.0", async ({ stream, connection }: { stream: any; connection: any }) => {
+            return new Promise(async (resolve, reject) => {
+                // Authenticate
+                const peerID = connection.remotePeer.toString();
+
+                if (!this.auth.isTemporaryAuthenticated(peerID)) {
+                    await streamSink(
+                        stream,
+                        JSON.stringify({
+                            status: false,
+                            message: "You must be authenticated to rename repositories.",
+                        }),
+                    );
+                    return resolve(false);
+                }
+
+                const address = await Auth.getWalletFromPeerID(peerID);
+
+                let data: { id?: string; blobId?: string; name: string } = { name: "" };
+                try {
+                    // Parse the incoming raw stream data
+                    let raw = "";
+                    for await (const chunk of stream.source) {
+                        raw += toString(chunk.subarray());
+                    }
+
+                    data = JSON.parse(raw);
+                } catch (e) {
+                    await streamSink(
+                        stream,
+                        JSON.stringify({
+                            status: false,
+                            message: "Failed to parse request",
+                        }),
+                    );
+                    return reject(e);
+                }
+
+                if (!data.id && !data.blobId) {
+                    await streamSink(
+                        stream,
+                        JSON.stringify({
+                            status: false,
+                            message: "Repository ID or Blob ID is required",
+                        }),
+                    );
+                    return resolve(false);
+                }
+
+                if (!data.name || typeof data.name !== "string") {
+                    await streamSink(
+                        stream,
+                        JSON.stringify({
+                            status: false,
+                            message: "New name is required",
+                        }),
+                    );
+                    return resolve(false);
+                }
+
+                if (data.name.length < 3 || data.name.length > 64) {
+                    await streamSink(
+                        stream,
+                        JSON.stringify({
+                            status: false,
+                            message: "New name must be between 3 and 64 characters",
+                        }),
+                    );
+                    return resolve(false);
+                }
+
+                const repoDB = new Database(join(__dirname, "../../db", "repositories.db"));
+
+                // Check if repository exists
+                const repo = repoDB
+                    .prepare("SELECT * FROM repositories WHERE (name = ? OR blobID = ?) AND owner = ?")
+                    .get(data.id || "", data.blobId || "", address);
+
+                if (!repo) {
+                    await streamSink(
+                        stream,
+                        JSON.stringify({
+                            status: false,
+                            message: "Repository not found",
+                        }),
+                    );
+                    return resolve(false);
+                }
+
+                // Update repository name
+                repoDB
+                    .prepare("UPDATE repositories SET name = ? WHERE (name = ? OR blobID = ?) AND owner = ?")
+                    .run(data.name, data.id || "", data.blobId || "", address);
+
+                repoDB.close();
+
+                await streamSink(
+                    stream,
+                    JSON.stringify({
+                        status: true,
+                        message: "Repository renamed successfully",
                     }),
                 );
 

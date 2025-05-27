@@ -27,11 +27,13 @@ async function setup() {
     spinner.color = "blue";
 
     try {
-        await run("walrus", { silent: true });
+        const com = await run("walrus", { silent: true });
+        if (com === 127) throw new Error("Walrus client is not installed");
+
         console.log(`\n${colorize.successIcon("Walrus client is already installed.")}`);
         spinner.stop();
     } catch (error) {
-        console.log(`Error: ${error}`);
+        // console.log(`Error: ${error}`);
         console.log(`\n${colorize.errorIcon("Walrus client is not installed.")}`);
         spinner.stop();
 

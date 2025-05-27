@@ -1,12 +1,11 @@
 import { join } from "path";
 import Database from "better-sqlite3";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
-import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 import { decodeSuiPrivateKey } from "@mysten/sui/cryptography";
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
 
 const SUI_ADDR = "0x2::sui::SUI";
 const WALRUS_ADDR = "0x356a26eb9e012a68958082340d4c4116e7f55615cf27affcff209cf0ae544f59::wal::WAL";
-// const WALRUS_ADDR = "0xb1b0650a8862e30e3f604fd6c5838bc25464b8d3d827fbd58af7cb9685b832bf::wwal::WWAL";
 
 export const SUI_CLIENT = new SuiClient({
     url: getFullnodeUrl("mainnet"),
