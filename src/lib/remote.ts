@@ -431,6 +431,39 @@ export default class Remote {
         });
     }
 
+    static async list(owner: string): Promise<{ status: boolean; repositories?: any[]; message?: string }> {
+        return new Promise((resolve, reject) => {
+            const repoDB = new Database(join(__dirname, "../../db", "repositories.db"));
+
+            try {
+                // Define the repository type
+                interface Repository {
+                    blobID: string;
+                    name: string;
+                    owner: string;
+                    description: string;
+                    timestamp: string;
+                }
+
+                // Fetch repositories for the specified owner
+                const repositories: Repository[] = repoDB
+                    .prepare("SELECT * FROM repositories WHERE owner = ?")
+                    .all(owner) as Repository[];
+
+                if (repositories.length === 0) {
+                    return resolve({ status: false, message: "No repositories found for this owner" });
+                }
+
+                return resolve({ status: true, repositories });
+            } catch (error) {
+                console.error("Error fetching repositories:", error);
+                return reject(error);
+            } finally {
+                repoDB.close();
+            }
+        });
+    }
+
     // Helper method to stream content in chunks
     private async streamContentToClient(
         stream: any,

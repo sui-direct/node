@@ -7,6 +7,7 @@ import express, { Request, Response } from "express";
 import { peerID } from "./config/peerID";
 import { CONFIG } from "./config/config";
 import { colorize } from "./utils/colors";
+import Remote from "./lib/remote";
 
 const app = express();
 const PORT = CONFIG.HTTP_PORT;
@@ -51,6 +52,44 @@ app.get("/peer-id", async (req: Request, res: Response) => {
 app.get("/ping", pingLimiter, async (req: Request, res: Response) => {
     res.send({ status: "ok" });
 });
+
+/**
+ * @route GET /list/:owner
+ * @param {string} owner - Owner's address
+ * @returns { repositories: object[] } - List of repositories owned by the user
+ * @description Returns a list of repositories owned by the specified user
+ */
+app.get("/list/:owner", async (req: Request, res: Response) => {
+    const { owner } = req.params;
+    if (!owner) {
+        res.status(400).send({ error: "Owner address is required" });
+        return;
+    }
+
+    const resp = await Remote.list(owner);
+    if (resp?.status === false) {
+        res.send({ repositories: [], message: resp.message || "No repositories found" });
+        return;
+    }
+
+    res.send({ repositories: resp.repositories });
+});
+
+/**
+ * @route GET /repo/metadata/:id
+ * @param {string} id - Repository ID or Blob ID
+ * @returns { repository: object } - The repository details
+ * @description Returns repository metadata
+ */
+app.get("/repo/metadata/:id", async (req: Request, res: Response) => {});
+
+/**
+ * @route GET /repo/:id
+ * @param {string} id - Repository ID or Blob ID
+ * @returns { repository: object } - The repository content
+ * @description Returns repository content
+ */
+app.get("/repo/:id", async (req: Request, res: Response) => {});
 
 export function server() {
     return new Promise<void>((resolve, reject) => {
