@@ -7,10 +7,14 @@ export async function initDynamicImports(libs: string[]) {
     return await Promise.all(libs.map(lib => dynamicImport(lib)));
 }
 
-export async function streamSink(stream: any, data: string) {
+export async function streamSink(stream: any, data: string | Buffer | Uint8Array) {
     await stream.sink(
         (async function* () {
-            yield fromString(data);
+            if (typeof data === 'string') {
+                yield fromString(data);
+            } else {
+                yield data;
+            }
         })(),
     );
 }

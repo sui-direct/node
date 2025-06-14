@@ -9,6 +9,7 @@ import Wallet from "./wallet";
 import { streamSink } from "../utils/helpers";
 
 const MAX_SIZE = 6 * 1024 ** 3;
+const CHUNK_SIZE = 64 * 1024;
 
 export default class Remote {
     public node: any;
@@ -18,6 +19,7 @@ export default class Remote {
         this.node = node;
         this.auth = auth;
         this.push(node);
+        this.pull(node);
         this.rename(node);
     }
 
@@ -179,6 +181,146 @@ export default class Remote {
         });
     }
 
+    pull(node: any, id?: string) {
+        const pullEvent = async (id: string) => {
+            const repoDB = new Database(join(__dirname, "../../db", "repositories.db"));
+
+            try {
+                // Define the repository type
+                interface Repository {
+                    blobID: string;
+                    name: string;
+                    owner: string;
+                    description: string;
+                    timestamp: string;
+                }
+
+                // Check if repository exists
+                const repo = repoDB
+                    .prepare("SELECT * FROM repositories WHERE (name = ? OR blobID = ?)")
+                    .get(id, id) as Repository;
+
+                if (!repo) return { status: false, message: "Repository not found" };
+
+                const walrus = new Walrus();
+                let content;
+                try {
+                    content = await walrus.readBlob(repo.blobID);
+                } catch (e) {
+                    return { status: false, message: "Failed to read repository content" };
+                }
+
+                return { content };
+            } finally {
+                repoDB.close();
+            }
+        };
+
+        if (!node && id) return pullEvent(id);
+
+        node.handle("/pull/1.0.0", async ({ stream, connection }: { stream: any; connection: any }) => {
+            const timeoutController = new AbortController();
+            const timeout = setTimeout(() => {
+                timeoutController.abort();
+            }, 30000);
+
+            try {
+                return await new Promise(async (resolve, reject) => {
+                    let data: { id?: string; blobId?: string } = {};
+
+                    try {
+                        let raw = "";
+                        const chunks: Buffer[] = [];
+
+                        for await (const chunk of stream.source) {
+                            if (timeoutController.signal.aborted) {
+                                throw new Error("Stream aborted during request parsing");
+                            }
+
+                            let buffer: Buffer;
+                            if (chunk.constructor.name === "Uint8ArrayList") {
+                                if (chunk.bufs && chunk.bufs.length > 0) {
+                                    buffer = Buffer.concat(chunk.bufs);
+                                } else {
+                                    buffer = Buffer.from(chunk.slice());
+                                }
+                            } else if (chunk instanceof Buffer) {
+                                buffer = chunk;
+                            } else if (chunk instanceof Uint8Array) {
+                                buffer = Buffer.from(chunk);
+                            } else {
+                                buffer = Buffer.from(chunk);
+                            }
+
+                            chunks.push(buffer);
+
+                            // Prevent memory issues with large requests
+                            if (chunks.reduce((sum, b) => sum + b.length, 0) > 1024 * 1024) {
+                                throw new Error("Request too large");
+                            }
+                        }
+
+                        raw = Buffer.concat(chunks).toString("utf8");
+                        data = JSON.parse(raw);
+                    } catch (e) {
+                        await streamSink(
+                            stream,
+                            JSON.stringify({
+                                status: false,
+                                message: "Failed to parse request",
+                            }),
+                        );
+                        return reject(e);
+                    }
+
+                    if (!data.id && !data.blobId) {
+                        await streamSink(
+                            stream,
+                            JSON.stringify({
+                                status: false,
+                                message: "Repository ID or Blob ID is required",
+                            }),
+                        );
+                        return resolve(false);
+                    }
+
+                    try {
+                        const pullResponse = await pullEvent(data.id || data.blobId || "");
+
+                        if (pullResponse?.status === false) {
+                            await streamSink(
+                                stream,
+                                JSON.stringify({
+                                    status: false,
+                                    message: pullResponse.message,
+                                }),
+                            );
+                            return resolve(false);
+                        }
+
+                        await this.streamContentToClient(
+                            stream,
+                            pullResponse.content!,
+                            timeoutController.signal,
+                        );
+                        resolve(true);
+                    } catch (error) {
+                        await streamSink(
+                            stream,
+                            JSON.stringify({
+                                status: false,
+                                message: "Failed to retrieve repository content",
+                            }),
+                        );
+                        resolve(false);
+                    }
+                });
+            } finally {
+                clearTimeout(timeout);
+            }
+        });
+    }
+
     rename(node: any) {
         node.handle("/rename/1.0.0", async ({ stream, connection }: { stream: any; connection: any }) => {
             return new Promise(async (resolve, reject) => {
@@ -287,5 +429,42 @@ export default class Remote {
                 resolve(true);
             });
         });
+    }
+
+    // Helper method to stream content in chunks
+    private async streamContentToClient(
+        stream: any,
+        content: Buffer | Uint8Array | string,
+        abortSignal: AbortSignal,
+    ): Promise<void> {
+        try {
+            // Convert content to buffer if needed
+            let buffer: Buffer;
+            if (typeof content === "string") {
+                buffer = Buffer.from(content, "base64");
+            } else if (content instanceof Uint8Array) {
+                buffer = Buffer.from(content);
+            } else {
+                buffer = content;
+            }
+
+            console.log(`[DEBUG] Streaming ${buffer.length} bytes in chunks of ${CHUNK_SIZE}`);
+
+            // Send chunks with a small delay to prevent overwhelming the connection
+            for (let i = 0; i < buffer.length; i += CHUNK_SIZE) {
+                if (abortSignal.aborted) {
+                    throw new Error("Stream aborted during transmission");
+                }
+
+                const chunk = buffer.slice(i, i + CHUNK_SIZE);
+                await streamSink(stream, chunk);
+
+                // Small delay to prevent overwhelming the connection
+                await new Promise(resolve => setTimeout(resolve, 1));
+            }
+        } catch (error) {
+            console.log("[DEBUG] Error during content streaming:", error);
+            throw error;
+        }
     }
 }
